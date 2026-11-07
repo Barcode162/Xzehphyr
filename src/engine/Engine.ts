@@ -587,7 +587,7 @@ export class Engine {
     const o = s.begin();
     const d = s.data;
     d[o + F.t] = this.lastNow;
-    d[o + F.interval] = interval;
+    d[o + F.interval] = interval > 0 ? interval : NaN; // the first frame has no previous timestamp
     d[o + F.cpu] = profiler.acc[Scope.Frame];
     d[o + F.gpu] = NaN;
     d[o + F.draws] = this.renderInfo.calls;

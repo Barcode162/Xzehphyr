@@ -108,3 +108,13 @@ label.chk input { margin-top: 2px; }
 #start button { font-size: 14px; padding: 10px 16px; background: rgba(22, 160, 133, 0.8); }
 #start button#start-silent { background: rgba(40, 50, 58, 0.9); }
 ul.small { padding-left: 18px; margin: 4px 0; }
+
+/* Narrow portrait phones: keep the HUD readable — toolbar becomes a column above the action buttons. */
+@media (max-width: 640px) {
+  #toolbar {
+    top: auto; bottom: calc(128px + var(--safe-bottom)); right: calc(10px + var(--safe-right));
+    flex-direction: column; flex-wrap: nowrap; max-width: none; gap: 6px;
+  }
+  #toolbar button { padding: 7px 9px; min-width: 56px; }
+  #hud { max-width: calc(100vw - 16px - var(--safe-left) - var(--safe-right)); font-size: 10.5px; }
+}

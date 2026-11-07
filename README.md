@@ -9,8 +9,16 @@ light descriptors. There is no permanently constructed scene. The camera, shadow
 physics and audio each *ask the world their own question* and keep their own representation;
 the frame is assembled from their answers. Geometry is generated only when a consumer requests it.
 
-![Gameplay (relational mode C)](docs/screenshots/gameplay.png)
-![Observer view: geometry exists only where the player camera — or a shadow into its view — requested it](docs/screenshots/observer.png)
+| | |
+|---|---|
+| ![Running the trail (mode C)](docs/screenshots/gameplay.jpg) | ![Dusk: lanterns selected into the local-light pool](docs/screenshots/dusk.jpg) |
+| ![Observer view: terrain exists only where the player camera looks; floating trees are off-screen shadow contributors](docs/screenshots/observer.jpg) | ![Stream and bridge; the trail stays on an embankment](docs/screenshots/bridge.jpg) |
+
+![Diagnostics dashboard](docs/screenshots/dashboard.jpg)
+![iPhone-size layout (emulated): touch joystick, live diagnostics, developer toggles](docs/screenshots/mobile.jpg)
+
+*Screenshots were captured with headless Chromium and a software GPU; the frame rates shown in
+the HUD reflect that rasterizer, not real hardware.*
 
 * [What is implemented](#what-is-implemented)
 * [Run it (desktop)](#run-it-desktop) · [Run it on an iPhone](#run-it-on-an-iphone)
@@ -41,7 +49,7 @@ the frame is assembled from their answers. Geometry is generated only when a con
 | Diagnostics dashboard (live, history graphs, subsystems, memory, GPU, device, APIs, world) | `src/ui/Dashboard.ts`, `src/diagnostics/*` |
 | Benchmark suite A/A2/B/C, camera sweep, static, ablation, instrumentation overhead, stress D | `src/bench/Benchmark.ts` |
 | CSV / JSON / device-report export, reset, run again — all local | Export tab, `src/diagnostics/Export.ts` |
-| Tests (24 unit tests) + Node data-layer benchmark | `tests/*`, `scripts/node-bench.ts` |
+| Tests (25 unit/integration tests) + Node data-layer benchmark | `tests/*`, `scripts/node-bench.ts` |
 
 Stack: **TypeScript 5.9 + Vite 7 + Three.js r187 (WebGL2 backend)**; experimental optional
 WebGPU backend via `three/webgpu` (`?backend=webgpu`). Three.js is used only to submit draw
@@ -54,7 +62,7 @@ batches — it does not hold the world.
 ```bash
 npm install          # .npmrc sets legacy-peer-deps (works around an npm 10 peer-resolution bug)
 npm run dev          # http://localhost:5173  (also printed: a Network URL for phones)
-npm test             # unit tests (vitest)
+npm test             # unit + integration tests (vitest)
 npm run build        # type-check + production build into dist/
 npm run preview      # serve dist/ on :4173 (no hot reload — use this for benchmarks)
 npm run bench:node   # data-layer micro-benchmark in Node (index vs scan, cached vs uncached)
@@ -80,6 +88,12 @@ Both dev and preview servers send COOP/COEP headers so Chromium is cross-origin 
    keep the screen awake, close other tabs, and use `npm run preview` (no hot-reload client).
 
 Notes:
+* Requires **iOS 15 or newer** (Three.js r187 needs WebGL 2).
+* **Not yet run on a physical iPhone.** In the development container it was checked with
+  Chromium's iPhone 13 emulation (viewport, DPR, real touch events driving the joystick, panel
+  layout). WebKit-specific behaviour (Safari's timer coarsening, memory limits, the silent
+  switch and Web Audio) has not been exercised. The APIs tab reports what the phone actually
+  exposes.
 * Plain-HTTP LAN URLs are **not a secure context**: WebGPU and cross-origin isolation are
   unavailable there. Everything else works. For WebGPU on iOS, serve `dist/` over HTTPS
   (any static host you control, or a local HTTPS proxy) and append `?backend=webgpu`.
@@ -237,13 +251,130 @@ and GPU time instead of FPS.
 
 ## Measured results (in this environment)
 
-RESULTS_PLACEHOLDER
+> **Read this first.** These numbers come from the development container, **not from an iPhone**:
+> headless Chromium 153 (Playwright) rendering through **SwiftShader, a software rasterizer**, on a
+> shared 4-vCPU Linux VM; DPR 1; desktop quality preset; viewport 960×540 (comparison) or
+> 640×360 (other suites); cross-origin isolated (timer resolution 5 µs). SwiftShader exposes GPU
+> timer queries, but they time CPU-emulated rasterization (≈200–500 ms per frame), so the frame
+> rate (1–5 FPS) is render-bound and says nothing about real GPUs. **The main-thread JS times
+> are the meaningful signal here**, as relative comparisons on one CPU. `performance.memory`
+> stayed at a constant 9.5 MB in every run (Chromium caches it), so browser heap is **not
+> reported**; the memory column is the engine's own estimate. Runs were single runs per
+> scenario: across repeated rounds the same scenario varied by up to ~±10%, so smaller
+> differences are noise. The final terrain fix near bridges (embankments) landed after these
+> runs; it changes a few terrain patches and no workload code. Raw JSON (every per-frame sample
+> plus the device report) is in [`docs/results/`](docs/results/); regenerate tables with
+> `python3 scripts/results-to-markdown.py docs/results compare ablation sweep static stress overhead`.
+
+**TEST A / A2 / B / C — same world (13 840 entities), same scripted trail run, 180 frames after a 90-frame cold warm-up**
+
+| | A · scene graph | A2 · static batching | B · relational, uncached | C · relational, cached + indexed |
+|---|---|---|---|---|
+| JS frame time, mean (p95) | 56.5 ms (76.6) | 15.7 ms (21.4) | 26.5 ms (36.1) | **2.67 ms (4.80)** |
+| Largest measured parts | Three.js scene update 19.4 + render submit 36.8 | scene update 5.9 + submit 9.6 | **reference resolution 22.8** (inside visibility 10.1, shadow 7.4, physics 5.8) | render submit 1.64 · assembly 0.38 · visibility 0.21 · shadow 0.09 |
+| Draw calls (incl. shadow pass) | 1 681 | 528 | 174 | 174 |
+| Triangles | 409 k | 566 k | 165 k | 165 k |
+| Transform recomputes / frame | – | – | 133 405 | 1.6 |
+| Frames with unresolved geometry | 0 % | 0 % | 1.1 % | 0 % |
+| Geometry + instance memory (estimate) | 50.6 MB | 52.6 MB | 3.9 MB | 6.8 MB |
+| Up-front scene build | 1.52 s | 1.17 s | world *data* 0.09 s (no geometry) | same |
+| Warm-up (first 90 frames, cold) | 56.9 ms JS | 16.6 ms | 28.5 ms | 4.1 ms; 124 representations generated, 78 entities/frame still unresolved on average |
+
+What this does and does not show:
+* **The relational representation alone was not faster.** Uncached (B) was slower than the
+  conventional static-batching baseline (A2): 26.5 vs 15.7 ms, nearly all of it re-resolving
+  transforms during full scans.
+* With caching and indexing (C), main-thread JS per frame was **~6× lower than A2 and ~21×
+  lower than A**, with 3× fewer draw calls than A2 and 0.29× its triangles for the same content.
+  Part of that is how C batches (one instanced batch per archetype × LOD, entity-level LOD),
+  not only how it stores the world.
+* GPU cost on real hardware was **not measured** (software rasterizer). A2 draws 3.4× C's
+  triangles; whether that matters on an iPhone GPU has to be measured on the device.
+
+**Ablation — C with one optimization removed (trail run, 150 frames)**
+
+| Variant | JS mean (p95) | Δ vs C | Notes |
+|---|---|---|---|
+| C (all on) | 2.60 ms (5.12) | | repeat rounds: 2.67 / 2.57 / 2.60 |
+| − cached reference resolution | 3.50 ms (6.08) | **+35 %** | assembly re-composes matrices: 0.37 → 1.25 ms |
+| − spatial index (full scans) | 2.90 ms (4.37) | +11 % | repeat rounds: +18 % / +43 % / +11 % at 13.8 k entities |
+| − query cache | 2.52 ms (4.71) | −3 % (noise) | **before a fix it was −14 %**: storing exact-frustum results every moving frame cost more than it saved; results are now stored only once the view repeats |
+| − geometry cache | 2.52 ms (5.00) | −3 % (noise) | 0.7 % of frames unresolved, 2× the generations |
+| − instance cache | 2.51 ms (4.63) | −3 % (noise) | its benefit is the still-camera path below |
+| − prefetch | 2.16 ms (3.34) | **−17 %** | prefetch spends idle budget generating; it pays off when turning (sweep below) |
+
+**Static camera (150 frames):** A 60.1 ms · A2 19.1 ms · **C 1.64 ms**. With the camera still, C
+serves every query from cache, skips assembly entirely (0.01 ms) and uploads 0 KB of instance data.
+Before a fix (the scripted runner was flagged as moved every frame) C was 2.06 ms with 0.38 ms
+of assembly.
+
+**Camera-direction sweep (fixed position, 360° in 240 frames, cold start)**
+
+| | JS mean (p95) | Draws | Triangles | JS by direction (8 sectors) | Visible / shadow-only by direction | Frames with unresolved geometry |
+|---|---|---|---|---|---|---|
+| A2 | 22.1 ms (30.1) | 654 | 622 k | 18.9–21.7 ms (first sector 38 ms: shader warm-up) | n/a | 0 % |
+| C | 3.22 ms (5.62) | 186 | 192 k | 2.48–4.12 ms | 496–1 302 / 4–227 | **16.7 %** (29.2 % before prefetch) |
+
+Shadow-only contributors swing 4 → 227 depending on whether the camera faces away from or
+toward the low sun: the shadow system is direction-dependent work by design.
+
+**D · Stress — off-camera trees, tall casters and extra lights added per step; dusk; 360° sweep.**
+This suite ran on the earlier build, before the query-cache, still-camera and prefetch changes.
+
+| Step | Entities | A2 JS | A2 draws / triangles | C JS (by direction) | C draws / triangles | C visible / shadow-only | C unresolved frames |
+|---|---|---|---|---|---|---|---|
+| 0 | 14 050 | 18.2 ms | 677 / 0.62 M | 3.69 ms (2.5–5.9) | 191 / 0.19 M | 1 037 / 118 | 24.4 % |
+| 1 (+15 k) | 29 260 | 20.8 ms | 724 / 1.14 M | 4.78 ms (3.2–6.9) | 194 / 0.35 M | 2 792 / 301 | 26.1 % |
+| 2 (+40 k) | 54 470 | 21.3 ms | 731 / 1.99 M | 7.60 ms (4.3–10.9) | 195 / 0.60 M | 5 696 / 570 | 26.1 % |
+
+A2's JS stays flat (cost follows the number of batches) while its triangles triple. C's draw
+calls stay flat, but its JS grows with the number of *visible* entities. The extra trees were
+placed uniformly, so many landed inside the view.
+
+**Instrumentation overhead (C, trail run):** profiler on 2.56 ms vs off 2.35 ms → ≈0.2 ms/frame
+(≈8 %, single run). The whole-frame timer stays on in both.
+
+**Data layer only (Node 22, same container, `npm run bench:node`)** — ms per operation:
+
+| Entities | Resolve all bounds: cached / uncached | Camera frustum query: index / scan (cached transforms) / scan (uncached) | Collision-sized sphere query: index / scan |
+|---|---|---|---|
+| 13 840 | 0.57 / 11.7 | 0.30 / 0.62 / 9.0 | 0.050 / 0.37 |
+| 33 840 | 0.69 / 19.9 | 0.17 / 1.97 / 24.4 | 0.009 / 1.04 |
+| 73 840 | 1.98 / 38.8 | 0.43 / 3.30 / 52.0 | 0.014 / 2.49 |
+| 133 840 | 3.99 / 88.9 | 1.30 / 6.09 / 91.0 | 0.048 / 5.00 |
+
+(The first row includes JIT warm-up effects. Indexed and scanned queries return identical sets;
+see `tests/spatial.test.ts`.)
 
 ---
 
 ## Biggest measured bottlenecks
 
-BOTTLENECKS_PLACEHOLDER
+Ranked by measured cost in the runs above:
+
+1. **Uncached reference resolution (B):** 22.8 of 26.5 ms per frame. Every full-scan query
+   re-walks every parent chain and re-evaluates terrain height, for 133 k transform recomputes
+   per frame. Version-checked caching is the single most valuable optimization (+35 % JS when
+   only it is removed from C).
+2. **Scene-graph traversal and submission (A):** 19–22 ms to update matrices and select LOD
+   for 13.6 k `THREE.LOD` objects (~60 k scene objects), plus 37 ms of Three.js render
+   submission (culling and sorting ~1.7 k draws).
+3. **Region-granular LOD (A2):** 3.4× C's triangles (2 M at 54 k entities). Its GPU cost is
+   unknown here but is the likely limit on a phone.
+4. **In C, render submission dominates the CPU** (1.4–2.4 ms, ~60 % of JS). Three.js
+   render-list work and WebGL calls are already the largest share.
+5. **C's per-visible-entity work** (visibility refinement plus instance assembly) grows with
+   what is in view: 7.6 ms at 5.7 k visible entities, 10.9 ms in the worst direction.
+6. **Pop-in from demand-only generation:** with cold caches, fast camera turns left ≥ 1
+   representation missing in 17 % of frames (29 % before prefetch). It comes from far terrain
+   patches generated within a 4 ms/frame budget.
+7. **Prefetch's own cost:** about 0.4 ms of idle generation per frame (−17 % JS when
+   disabled) in exchange for less pop-in.
+8. **Exact-observation query caching** only helps when the view repeats. Storing it while
+   moving was a net cost until it was gated.
+9. **Memory and startup of prebuilt scenes:** ~51–60 MB (estimated) of geometry and instance
+   data, built in 1.2–1.6 s, versus 4–8 MB generated on demand.
+10. **Instrumentation:** ~0.2 ms per frame.
 
 ---
 
@@ -273,7 +404,30 @@ Summarized here; details in [docs/ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-co
 
 ## What to investigate next
 
-INVESTIGATE_PLACEHOLDER
+1. **Run the suites on the target devices** (iPhone Safari, a desktop GPU). Safari exposes no
+   GPU timer, so add an opt-in "forced sync" probe (1-pixel `readPixels` after render, clearly
+   labeled wall-clock-with-stall) or use WebGPU timestamp queries where available.
+2. **Move evaluation and generation off the main thread:** systems and the geometry evaluator
+   are renderer-agnostic and work on typed arrays, so they can run in Workers over
+   `SharedArrayBuffer` (needs HTTPS + cross-origin isolation). This would remove pop-in
+   pressure and the render/evaluate serialization.
+3. **Cut per-visible-entity cost:** cache instance blocks per index node (copy whole
+   fully-inside nodes), reuse visibility between frames (re-test only nodes crossing frustum
+   planes), and compact visible lists per archetype.
+4. **GPU-driven culling and indirect draws (WebGPU):** upload entity bounds once, cull and LOD
+   in a compute shader, and drop CPU instance writes.
+5. **Predictive prefetch:** the runner moves along the trail in curve coordinates
+   (`s`, ds/dt), so future observations are predictable. Prefetch along predicted `s` and
+   adapt the generation budget to measured frame slack.
+6. **Shadows:** cascaded shadow maps with per-cascade contributor queries and tighter
+   caster-volume tests (the capsule test is conservative).
+7. **Stronger baselines:** `BatchedMesh` with multi-draw, per-entity LOD with instancing, and
+   chunked grass for A, so no conventional configuration is a strawman.
+8. **More relational queries:** heightfield horizon occlusion (terrain hides most of the
+   valley), and audio occlusion from the same analytic terrain.
+9. **Memory:** compressed vertex formats (oct-encoded normals, half-float positions) and
+   device-specific geometry budgets for iOS.
+10. **Statistics:** repeated runs with confidence intervals, and an automated device matrix.
 
 ---
 
@@ -292,7 +446,7 @@ src/
   diagnostics/ Profiler, FrameStats, GpuTimer, GLInstrument, DeviceInfo, PerfObservers, Export
   bench/      Benchmark suites & runner
   ui/         Dashboard, Graph
-tests/        frames, spatial (index ≡ naive), systems (physics, shadows, geometry, cache, stats)
-scripts/      node-bench.ts
-docs/         ARCHITECTURE.md, BROWSER_LIMITATIONS.md, screenshots/
+tests/        frames, spatial (index ≡ naive), systems (physics, shadows, geometry, cache, stats), bridge (world+physics integration)
+scripts/      node-bench.ts, results-to-markdown.py
+docs/         ARCHITECTURE.md, BROWSER_LIMITATIONS.md, screenshots/, results/ (raw benchmark JSON)
 ```
