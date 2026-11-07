@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#0d1418" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <title>Relational World Engine</title>
+  </head>
+  <body>
+    <canvas id="view"></canvas>
+    <div id="touch-surface"></div>
+    <div id="joystick"><div id="joystick-knob"></div></div>
+    <button id="btn-jump" class="action" aria-label="Jump">JUMP</button>
+    <button id="btn-sprint" class="action" aria-label="Sprint toggle">SPRINT</button>
+    <div id="hud"></div>
+    <div id="toolbar">
+      <button id="tb-stats" title="Diagnostics">Stats</button>
+      <button id="tb-viz" title="Toggle developer visualization">Viz</button>
+      <button id="tb-god" title="Observer (god) view">God</button>
+      <button id="tb-dev" title="Developer visualization settings">Dev</button>
+      <button id="tb-mode" title="Architecture mode">Mode</button>
+      <button id="tb-bench" title="Benchmarks">Bench</button>
+    </div>
+    <div id="panel" class="hidden">
+      <div id="panel-head"><div id="panel-tabs"></div><button id="panel-close" aria-label="Close">✕</button></div>
+      <div id="panel-body"></div>
+    </div>
+    <div id="status">Loading…</div>
+    <div id="start">
+      <div class="card">
+        <h1>Relational World Engine</h1>
+        <p>A forest that exists as <b>data</b>. The camera, physics, lighting, shadows and audio each request only what they need; geometry is generated on demand.</p>
+        <p class="small">Touch: left half = move (push far to run) · right half = look · JUMP / SPRINT buttons.<br />Desktop: WASD / arrows, mouse-drag to look, Space jump, Shift sprint, wheel zoom.</p>
+        <p class="small"><b>Stats</b> = diagnostics · <b>Viz</b> = architecture overlay · <b>God</b> = observer view · <b>Bench</b> = benchmarks</p>
+        <div class="row center"><button id="start-audio">Start with sound</button><button id="start-silent">Start silent</button></div>
+        <p class="small">All measurements stay on this device. No analytics, no network requests.</p>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

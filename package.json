@@ -1,0 +1,25 @@
+{
+  "name": "relational-world-engine",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A camera-driven, demand-evaluated 3D world architecture prototype (relational world database + independent evaluation systems).",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "bench:node": "esbuild scripts/node-bench.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/rwe-node-bench.mjs --log-level=warning && node node_modules/.cache/rwe-node-bench.mjs"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.187.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.12",
+    "esbuild": "0.28.2"
+  }
+}

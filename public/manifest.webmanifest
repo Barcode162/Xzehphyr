@@ -1,0 +1,10 @@
+{
+  "name": "Relational World Engine",
+  "short_name": "RWE",
+  "start_url": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0d1418",
+  "theme_color": "#0d1418",
+  "icons": []
+}
