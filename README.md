@@ -384,7 +384,7 @@ Summarized here; details in [docs/ARCHITECTURE.md §7](docs/ARCHITECTURE.md#7-co
 
 * Three.js requires a `THREE.Scene`; the presenter uses it as a flat, per-frame-refilled
   container of draw batches (presentation state only).
-* Vegetation uses 30 shared archetypes + per-entity scale/yaw/shape/tint; grass is a per-patch
+* Vegetation and rocks use 24 shared archetypes (26 with the lantern and stress pillar; 66 LOD meshes in total) + per-entity scale/yaw/shape/tint; grass is a per-patch
   procedural field, not entities.
 * Terrain carving uses curve copies made at world build; moving the forest/trail frame would
   not re-carve terrain until rebuild.

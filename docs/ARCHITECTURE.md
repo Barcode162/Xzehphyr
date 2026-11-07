@@ -77,7 +77,7 @@ Source files:
     `y` = height above the curve profile. The player, lanterns, bridges and stream sound
     emitters are positioned this way.
 * **Procedural definitions** (`ProceduralDef`) are compact recipes (family, variant, seed,
-  LOD distances, parameters). 30 shared archetypes describe ~13 000 vegetation/rock entities;
+  LOD distances, parameters). 24 shared archetypes (66 LOD meshes) describe ~13 000 vegetation/rock entities;
   terrain patches, water patches and bridges have unique definitions.
 * **Physical / acoustic / light descriptors** are separate tables — physics never sees a mesh,
   audio never sees a material.
@@ -238,7 +238,7 @@ physics and audio are shared with the relational path, so the comparison isolate
 
 1. **Three.js needs a `THREE.Scene`.** The presenter keeps a flat container of draw batches
    that it refills from system results every frame. It is presentation state, not the world.
-2. **Archetype instancing.** Vegetation uses 30 shared archetypes; per-entity variation is
+2. **Archetype instancing.** Vegetation and rocks use 24 shared archetypes; per-entity variation is
    scale, yaw, shape scale and a hash-based tint. Fully unique procedural geometry per entity
    would multiply generation and memory costs.
 3. **Grass is a per-patch procedural field**, not entities. Grass blocks assume translation-only
