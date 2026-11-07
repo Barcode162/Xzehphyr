@@ -157,7 +157,7 @@ An entry is reused only while all dependencies are unchanged:
 
 | Consumer | Key | Typical hit rate |
 |---|---|---|
-| Visibility | exact (quantized) frustum planes | hits only when the camera is still |
+| Visibility | exact (quantized) frustum planes | hits only when the camera is still; results are *stored* only once the observation repeats (storing every moving frame was measured to cost more than it saved) |
 | Shadow | frustum + sun version | idem |
 | Lighting | 8 m camera cell (conservative radius) | high while moving |
 | Physics broadphase | 4 m character cell (box expanded by margin) | high while moving |
@@ -210,6 +210,12 @@ Per frame (`Engine.evaluateRelational`):
    per-frame time budget (3–4 ms default).
 5. `GeometryStore.endFrame()` — Test C: LRU eviction above a byte budget. Test B:
    dispose everything not requested this frame.
+
+Test C also issues **anticipatory requests** (`prefetch` flag): when nothing the camera needs
+is pending, unique representations (terrain/water patches, grass) within 190 m of the camera are
+queued at the lowest priority and generated with leftover budget. This was added after the
+camera-sweep benchmark showed ungenerated patches in a quarter of the frames while turning.
+Shared archetypes need no prefetch — one representation serves every instance.
 
 Test C additionally caches **instance-ready matrices per entity** (validated by the entity's
 resolved-transform version) and **skips assembly entirely** when the observation is

@@ -139,6 +139,7 @@ async function boot(): Promise<void> {
     const frames = +(params.get('frames') ?? 300);
     const list = SUITES[auto].build({ density: +(params.get('density') ?? 1), frames, stressSteps: (params.get('steps') ?? '0,15000').split(',').map(Number), stressArchs: ['A2', 'C'] });
     overlay.style.display = 'none';
+    bench.preciseMemory = params.get('umem') === '1';
     await bench.runSuite(list);
     (window as unknown as { __rweDone: boolean }).__rweDone = true;
   }

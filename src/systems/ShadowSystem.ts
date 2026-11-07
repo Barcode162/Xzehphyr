@@ -40,6 +40,8 @@ export class ShadowSystem {
   /** Debug: capsule segments of shadow-only contributors (ax, ay, az, bx, by, bz). */
   capsules = new Float32Array(0);
   fromCache = false;
+  /** Only store exact-observation results once the observation repeats (see VisibilitySystem). */
+  private lastKey = -1;
 
   evaluate(
     obs: Observation, sunX: number, sunY: number, sunZ: number, sunVersion: number,
@@ -67,8 +69,9 @@ export class ShadowSystem {
       this.candidates.clear();
       discovery.aabb(minX, -1e4, minZ, maxX, 1e4, maxZ, Flag.CastsShadow, this.candidates);
       list = this.candidates;
-      qcache.store(key, list, discovery.lastMask, discovery.index, db.structureVersion);
+      if (key === this.lastKey) qcache.store(key, list, discovery.lastMask, discovery.index, db.structureVersion);
     }
+    this.lastKey = key;
     if (this.fromCache) counters.qcacheHits++; else counters.qcacheMisses++;
     this.candidateCount = list.length;
 

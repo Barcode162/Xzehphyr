@@ -76,6 +76,8 @@ export interface ScenarioResult {
   delayedFrames: number;
   vsyncLimited: boolean;
   memory: {
+    /** performance.measureUserAgentSpecificMemory() total (browser-reported; cross-origin isolated Chromium only). */
+    uaSpecificMemoryMB: number | null;
     browserHeapStartMB: number | null;
     browserHeapEndMB: number | null;
     browserHeapPeakMB: number | null;
@@ -155,6 +157,7 @@ export const SUITES: Record<string, { label: string; description: string; build:
         ['C − query cache', { queryCache: false }],
         ['C − geometry cache', { geometryCache: false }],
         ['C − instance cache', { instanceCache: false }],
+        ['C − prefetch', { prefetch: false }],
       ];
       return off.map(([label, f]) => scenario({ id: `ablation-${label}`, label, arch: 'custom', flags: { ...base, ...f }, density: o.density, frames: o.frames, group: 'ablation' }));
     },
@@ -191,6 +194,20 @@ export interface SuiteOptions {
   frames: number;
   stressSteps: number[];
   stressArchs: ArchId[];
+  /** Also call performance.measureUserAgentSpecificMemory() after each scenario (slow: waits for a GC). */
+  preciseMemory?: boolean;
+}
+
+/** Browser-reported total memory via measureUserAgentSpecificMemory (null when unavailable or timed out). */
+export async function measureUAMemory(timeoutMs = 25000): Promise<number | null> {
+  const p = performance as Performance & { measureUserAgentSpecificMemory?: () => Promise<{ bytes: number }> };
+  if (typeof p.measureUserAgentSpecificMemory !== 'function' || !(self as unknown as { crossOriginIsolated?: boolean }).crossOriginIsolated) return null;
+  try {
+    const r = await Promise.race([p.measureUserAgentSpecificMemory(), new Promise<null>((res) => setTimeout(() => res(null), timeoutMs))]);
+    return r ? r.bytes / 1048576 : null;
+  } catch {
+    return null;
+  }
 }
 
 export class BenchmarkRunner {
@@ -213,6 +230,8 @@ export class BenchmarkRunner {
   private frames(n: number): Promise<void> {
     return new Promise((resolve) => this.frameWaiters.push({ remaining: n, resolve }));
   }
+
+  preciseMemory = false;
 
   async runSuite(scenarios: Scenario[]): Promise<ScenarioResult[]> {
     if (this.running) return [];
@@ -344,6 +363,16 @@ export class BenchmarkRunner {
     if (E.flags.presenter !== 'relational') notes.push('Conventional path: visible/shadow-only counts are not produced (Three.js culls internally).');
     E.perf.sampleHeap();
     const heapEnd = E.perf.heapAvailable ? E.perf.heapUsedMB : null;
+    if (heapStart !== null && heapEnd !== null && heapStart === heapEnd && heapEnd === heapPeak) {
+      notes.push('performance.memory did not change during the run: Chromium quantizes and caches this value (launch with --enable-precise-memory-info, or enable precise memory measurement). Treat browserHeap* as unreliable for this run.');
+    }
+    let uaMem: number | null = null;
+    if (this.preciseMemory) {
+      E.paused = true; // keep the scenario state while waiting for the browser's memory measurement
+      uaMem = await measureUAMemory();
+      E.paused = false;
+      if (uaMem === null) notes.push('measureUserAgentSpecificMemory unavailable (needs cross-origin isolation, Chromium) or timed out.');
+    }
     // yaw sectors
     let yawSectors: ScenarioResult['yawSectors'];
     if (sc.script === 'yaw-sweep') {
@@ -396,6 +425,7 @@ export class BenchmarkRunner {
       delayedFrames: Number.isFinite(refreshMs) ? interval.filter((v) => v > refreshMs * 1.5).length : NaN,
       vsyncLimited,
       memory: {
+        uaSpecificMemoryMB: uaMem !== null ? round(uaMem, 2) : null,
         browserHeapStartMB: heapStart !== null ? round(heapStart, 1) : null,
         browserHeapEndMB: heapEnd !== null ? round(heapEnd, 1) : null,
         browserHeapPeakMB: E.perf.heapAvailable ? round(heapPeak, 1) : null,

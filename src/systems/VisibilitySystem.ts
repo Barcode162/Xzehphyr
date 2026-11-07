@@ -24,6 +24,13 @@ export class VisibilitySystem {
   fromCache = false;
   culledByDistance = 0;
   candidateCount = 0;
+  /**
+   * Results keyed by the exact observation can only hit when the camera is still.
+   * Storing them every frame while moving costs a copy per frame for nothing
+   * (measured in the ablation suite), so results are stored only once the
+   * observation repeats (stillness detected).
+   */
+  private lastHash = -1;
 
   evaluate(obs: Observation, discovery: Discovery, qcache: QueryCache, db: WorldDatabase): void {
     profiler.begin(Scope.Visibility);
@@ -38,8 +45,9 @@ export class VisibilitySystem {
       this.candidates.clear();
       discovery.frustum(obs.volume, Flag.Visual, this.candidates);
       list = this.candidates;
-      qcache.store(key, list, discovery.lastMask, discovery.index, db.structureVersion);
+      if (obs.hash === this.lastHash) qcache.store(key, list, discovery.lastMask, discovery.index, db.structureVersion);
     }
+    this.lastHash = obs.hash;
     if (this.fromCache) counters.qcacheHits++; else counters.qcacheMisses++;
     this.candidateCount = list.length;
     // refine: distance culling and LOD selection

@@ -85,6 +85,15 @@ export class GeometryStore {
     return null;
   }
 
+  /** Anticipatory request: queue generation without counting a cache miss (no consumer needs it yet). */
+  prefetch(key: number, priority: number): void {
+    if (this.entries.has(key) || this.pending.has(key)) return;
+    this.pending.set(key, priority);
+    this.pendingKeys.push(key);
+    this.prefetchedTotal++;
+  }
+  prefetchedTotal = 0;
+
   /** Peek without marking use or queueing. */
   peek(key: number): GeomEntry | undefined {
     return this.entries.get(key);

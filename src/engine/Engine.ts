@@ -15,12 +15,12 @@ import { ConventionalPresenter } from '../render/ConventionalPresenter';
 import { Character } from '../render/Character';
 import { toBufferGeometry } from '../render/Materials';
 import { buildWorld, BuiltWorld, WorldConfig, DEFAULT_WORLD } from '../world/WorldGenerator';
-import { Family, FrameMode, Kind } from '../world/types';
+import { Family, Flag, FrameMode, Kind } from '../world/types';
 import { SpatialIndex } from '../spatial/SpatialIndex';
 import { Discovery } from '../spatial/Discovery';
 import { QueryCache } from '../spatial/QueryCache';
 import { ConvexVolume } from '../spatial/Frustum';
-import { GeometryStore } from '../geometry/GeometryStore';
+import { GeometryStore, keyOf } from '../geometry/GeometryStore';
 import { generateArchetype, terrainPatch, waterPatch, grassPatch, grassClump } from '../geometry/Generators';
 import { VisibilitySystem } from '../systems/VisibilitySystem';
 import { ShadowSystem } from '../systems/ShadowSystem';
@@ -35,7 +35,7 @@ import { FrameStats, F, SCOPE_OFFSET } from '../diagnostics/FrameStats';
 import { GpuTimer } from '../diagnostics/GpuTimer';
 import { GLInstrument } from '../diagnostics/GLInstrument';
 import { PerfObservers } from '../diagnostics/PerfObservers';
-import { clamp } from '../util/math';
+import { clamp, IntList } from '../util/math';
 import { CurveProjection } from '../world/Curve';
 
 export type ArchId = 'A' | 'A2' | 'B' | 'C' | 'custom';
@@ -47,24 +47,26 @@ export interface ArchFlags {
   queryCache: boolean;
   geometryCache: boolean;
   instanceCache: boolean;
+  /** Anticipatory requests for unique representations around the camera (terrain, water, grass) when the generation queue is idle. */
+  prefetch: boolean;
 }
 
 export const PRESETS: Record<Exclude<ArchId, 'custom'>, ArchFlags & { label: string; description: string }> = {
   A: {
     label: 'A · Conventional scene graph', description: 'All geometry prebuilt. One THREE.LOD + meshes per entity. Three.js traversal, per-object culling, LOD and shadow pass.',
-    presenter: 'scenegraph', transformCache: true, spatialIndex: true, queryCache: true, geometryCache: true, instanceCache: false,
+    presenter: 'scenegraph', transformCache: true, spatialIndex: true, queryCache: true, geometryCache: true, instanceCache: false, prefetch: false,
   },
   A2: {
     label: 'A2 · Conventional static batching', description: 'All geometry prebuilt into static InstancedMesh batches per region/archetype/LOD with region-level LOD.',
-    presenter: 'batched', transformCache: true, spatialIndex: true, queryCache: true, geometryCache: true, instanceCache: false,
+    presenter: 'batched', transformCache: true, spatialIndex: true, queryCache: true, geometryCache: true, instanceCache: false, prefetch: false,
   },
   B: {
     label: 'B · Relational, uncached', description: 'Relational storage + independent system queries + demand-driven geometry. No transform cache, no spatial index (full scans), no query cache, geometry kept only while observed.',
-    presenter: 'relational', transformCache: false, spatialIndex: false, queryCache: false, geometryCache: false, instanceCache: false,
+    presenter: 'relational', transformCache: false, spatialIndex: false, queryCache: false, geometryCache: false, instanceCache: false, prefetch: false,
   },
   C: {
-    label: 'C · Relational, cached + indexed', description: 'B plus cached reference resolution, spatial index, cached query results, LRU geometry cache and cached instance transforms.',
-    presenter: 'relational', transformCache: true, spatialIndex: true, queryCache: true, geometryCache: true, instanceCache: true,
+    label: 'C · Relational, cached + indexed', description: 'B plus cached reference resolution, spatial index, cached query results, LRU geometry cache, cached instance transforms and anticipatory (idle-time) generation of nearby terrain.',
+    presenter: 'relational', transformCache: true, spatialIndex: true, queryCache: true, geometryCache: true, instanceCache: true, prefetch: true,
   },
 };
 
@@ -183,6 +185,8 @@ export class Engine {
     this.discovery = new Discovery(w.db, w.frames, this.index);
     this.discovery.rebuild();
     this.store = new GeometryStore((def, lod) => this.generate(def, lod));
+    this.sharedComplete = false;
+    this.prefetchCell = -1;
     this.store.labelOf = (def, lod) => (lod === 3 && w.db.defs[def].family === Family.TerrainPatch ? 'Grass' : FAMILY_LABEL[w.db.defs[def].family] ?? 'geometry');
     this.store.budgetBytes = this.isMobileQuality ? 64 * 1048576 : 160 * 1048576;
     const regionAt = (x: number, z: number) => {
@@ -277,6 +281,8 @@ export class Engine {
       this.relational.clear();
     }
     this.store.resetStats();
+    this.sharedComplete = false;
+    this.prefetchCell = -1;
     this.qcache.total = { hits: 0, misses: 0, invalidations: 0, evictions: 0 };
     this.geomChanged = true;
   }
@@ -444,9 +450,13 @@ export class Engine {
     const heading = curve.smoothHeading(pose.s);
     const s = curve.wrapS(pose.s);
     const lo = w.player * 8;
-    db.local[lo] = s; db.local[lo + 1] = 0; db.local[lo + 2] = pose.lateral;
-    db.local[lo + 3] = 0; db.local[lo + 4] = 0; db.local[lo + 5] = 0; db.local[lo + 6] = 1;
-    db.touch(w.player);
+    const L = db.local;
+    // only a real change of the local reference counts as a mutation (keeps caches valid when still)
+    if (L[lo] !== s || L[lo + 1] !== 0 || L[lo + 2] !== pose.lateral || L[lo + 4] !== 0 || L[lo + 6] !== 1) {
+      L[lo] = s; L[lo + 1] = 0; L[lo + 2] = pose.lateral;
+      L[lo + 3] = 0; L[lo + 4] = 0; L[lo + 5] = 0; L[lo + 6] = 1;
+      db.touch(w.player);
+    }
     const prevX = this.body.x, prevZ = this.body.z;
     this.physics.readBody(w.player, this.body);
     const ground = w.terrain.height(this.body.x, this.body.z);
@@ -488,12 +498,68 @@ export class Engine {
     const sd = this.lighting.sunDir;
     this.shadow.evaluate(this.obs, sd[0], sd[1], sd[2], this.lighting.sunVersion, this.discovery, this.qcache, w.db, this.vis, this.debugCollect);
     this.relational.assemble(this.obs, this.vis, this.shadow, this.geomChanged, this.debugCollect);
+    // prefetching is only meaningful when generated representations are retained (else: generate → dispose churn, measured)
+    if (this.flags.prefetch && this.store.retain) this.prefetchNearby();
     profiler.begin(Scope.GeomGen);
     const made = this.store.process(this.quality.geomBudgetMs);
     profiler.end(Scope.GeomGen);
     this.store.endFrame();
     this.geomChanged = made > 0 || counters.geomDisposed > 0 || counters.geomEvicted > 0;
     this.collectCounters();
+  }
+
+  /**
+   * Anticipatory demand: queue, at a priority below anything a consumer requested,
+   * (1) every LOD of every shared archetype and (2) unique representations (terrain/water
+   * patches and grass) in a ring around the camera — so turning the camera does not expose
+   * ungenerated representations. Generation still respects the per-frame time budget.
+   */
+  prefetchRadius = 190;
+  private prefetchList = new IntList(256);
+  private prefetchCell = -1;
+  private sharedComplete = false;
+  private sharedCheckedAt = -1;
+  private prefetchNearby(): void {
+    const w = this.world;
+    // shared archetypes: every LOD of every archetype (a few MB, serves thousands of instances)
+    if (!this.sharedComplete || this.sharedCheckedAt !== this.store.disposedTotal) {
+      this.sharedCheckedAt = this.store.disposedTotal;
+      let missing = 0;
+      for (const d of w.db.defs) {
+        if (!d.shared) continue;
+        for (let lod = 0; lod < d.lodCount; lod++) {
+          const k = keyOf(d.id, lod);
+          if (!this.store.peek(k)) { missing++; this.store.prefetch(k, 1e7 + lod); }
+        }
+      }
+      this.sharedComplete = missing === 0;
+    }
+    const cell = 24;
+    const qx = Math.floor(this.obs.px / cell), qz = Math.floor(this.obs.pz / cell);
+    const key = qx * 73856093 ^ qz * 19349663;
+    if (key !== this.prefetchCell) {
+      this.prefetchCell = key;
+      this.prefetchList.clear();
+      this.discovery.sphere(this.obs.px, this.obs.py, this.obs.pz, Math.max(this.prefetchRadius, this.obs.far), Flag.Terrain | Flag.Water, this.prefetchList);
+      for (const b of w.bridges) this.prefetchList.push(b);
+    }
+    const db = w.db, B = this.discovery.boundsOf(0);
+    const ls2 = this.obs.lodScale * this.obs.lodScale;
+    for (let i = 0; i < this.prefetchList.length; i++) {
+      const e = this.prefetchList.data[i];
+      const di = db.def[e];
+      if (di < 0) continue;
+      const def = db.defs[di];
+      if (def.shared) continue; // archetypes are handled above
+      const o = e * 4;
+      const h = def.params[2] * 0.5 || 0;
+      const dx = Math.max(Math.abs(B[o] - this.obs.px) - h, 0), dz = Math.max(Math.abs(B[o + 2] - this.obs.pz) - h, 0);
+      const d2 = dx * dx + dz * dz;
+      let lod = 0;
+      while (lod < def.lodCount - 1 && d2 > def.lodDist2[lod] * ls2) lod++;
+      this.store.prefetch(keyOf(def.id, lod), 1e7 + d2);
+      if (def.family === Family.TerrainPatch && d2 < (this.quality.grassDistance + 46) ** 2 ) this.store.prefetch(def.id * 4 + 3, 1e7 + d2);
+    }
   }
 
   private evaluateConventional(): void {

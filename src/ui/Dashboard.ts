@@ -6,7 +6,7 @@
 import { Engine, ArchId, PRESETS, ArchFlags } from '../engine/Engine';
 import { DebugViz, TOGGLE_LABELS, DebugToggles } from '../debug/DebugViz';
 import { BenchmarkRunner, SUITES, ScenarioResult, SuiteOptions } from '../bench/Benchmark';
-import { memoryEstimates } from '../bench/Benchmark';
+import { memoryEstimates, measureUAMemory } from '../bench/Benchmark';
 import { profiler, Scope, SCOPE_NAMES, CROSS_CUTTING, counters } from '../diagnostics/Profiler';
 import { F, SCOPE_OFFSET, summarize, onePercentLow } from '../diagnostics/FrameStats';
 import { DeviceReport } from '../diagnostics/DeviceInfo';
@@ -276,7 +276,8 @@ export class Dashboard {
           <h4>Engine work counters</h4><div id="sys-counters"></div>`;
         break;
       case 'Memory':
-        html = `<div class="legend">"browser-reported" values come from performance.memory (Chromium only). "exact" = bytes of typed arrays this engine allocated. "estimate" = derived (e.g. GPU residency assumed equal to uploaded bytes).</div><div id="mem-table"></div>`;
+        html = `<div class="legend">"browser-reported" values come from performance.memory (Chromium only; quantized and cached by the browser, may look static). "exact" = bytes of typed arrays this engine allocated. "estimate" = derived (e.g. GPU residency assumed equal to uploaded bytes).</div><div id="mem-table"></div>
+          <div class="row"><button id="mem-precise">Measure precise memory (measureUserAgentSpecificMemory)</button></div><div id="mem-precise-out" class="legend"></div>`;
         break;
       case 'GPU':
         html = `<div class="legend">CPU render-submit time is <b>not</b> GPU execution time. GPU time is shown only when a timer-query extension is exposed.</div><div id="gpu-table"></div>
@@ -393,7 +394,7 @@ export class Dashboard {
     const E = this.engine;
     const archs: ArchId[] = ['A', 'A2', 'B', 'C'];
     const radios = archs.map((a) => `<label class="chk"><input type="radio" name="arch" value="${a}" ${E.arch === a ? 'checked' : ''}><span><b>${PRESETS[a as 'A'].label}</b><br><span class="small">${PRESETS[a as 'A'].description}</span></span></label>`).join('');
-    const flagNames: Array<[keyof ArchFlags, string]> = [['transformCache', 'Cached reference resolution'], ['spatialIndex', 'Spatial index (else full scan)'], ['queryCache', 'Query result cache'], ['geometryCache', 'Geometry LRU cache (else keep-while-observed)'], ['instanceCache', 'Instance transform cache + skip unchanged assembly']];
+    const flagNames: Array<[keyof ArchFlags, string]> = [['transformCache', 'Cached reference resolution'], ['spatialIndex', 'Spatial index (else full scan)'], ['queryCache', 'Query result cache'], ['geometryCache', 'Geometry LRU cache (else keep-while-observed)'], ['instanceCache', 'Instance transform cache + skip unchanged assembly'], ['prefetch', 'Anticipatory generation of nearby terrain/water/grass (idle budget)']];
     const flags = flagNames.map(([k, l]) => `<label class="chk"><input type="checkbox" data-flag="${k}" ${E.flags[k] ? 'checked' : ''} ${E.flags.presenter !== 'relational' ? 'disabled' : ''}>${l}</label>`).join('');
     return `${radios}<h4>Relational flags (custom)</h4>${flags}
       <h4>Instrumentation</h4>
@@ -410,6 +411,7 @@ export class Dashboard {
     return `<div class="row"><select id="b-suite">${suites}</select></div><div class="legend">${esc(desc)}</div>
       <div class="row"><label>Frames <input id="b-frames" type="number" min="120" max="1700" step="60" value="${o.frames}"></label>
       <label>Density × <input id="b-density" type="number" min="0.25" max="4" step="0.25" value="${o.density}"></label></div>
+      <div class="row"><label class="chk"><input type="checkbox" id="b-umem" ${this.bench.preciseMemory ? 'checked' : ''}>Precise memory after each scenario (measureUserAgentSpecificMemory; Chromium + isolation; slow)</label></div>
       <div class="row"><label>D: extra trees per step <input id="b-steps" type="text" value="${o.stressSteps.join(',')}"></label>
       <label>D: architectures <input id="b-archs" type="text" value="${o.stressArchs.join(',')}"></label></div>
       <div class="row"><button id="b-run" ${this.bench.running ? 'disabled' : ''}>Run</button><button id="b-again" ${this.bench.running || !this.lastSuite ? 'disabled' : ''}>Run again</button>
@@ -423,6 +425,11 @@ export class Dashboard {
   private bind(): void {
     const E = this.engine;
     const on = (id: string, ev: string, fn: (e: Event) => void) => document.getElementById(id)?.addEventListener(ev, fn);
+    on('mem-precise', 'click', async () => {
+      this.set('mem-precise-out', 'Measuring (the browser waits for a garbage collection, up to ~20 s)…');
+      const mb = await measureUAMemory();
+      this.set('mem-precise-out', mb === null ? 'Unavailable: requires Chromium with cross-origin isolation (or timed out).' : `Total ${fmt(mb, 2)} MB (browser-reported, all JS realms of this page)`);
+    });
     on('btn-backend', 'click', () => {
       const u = new URL(location.href);
       u.searchParams.set('backend', E.stage.backend === 'webgpu' ? 'webgl' : 'webgpu');
@@ -489,6 +496,7 @@ export class Dashboard {
         stressArchs: g('b-archs').split(',').map((s) => s.trim().toUpperCase()).filter((s) => ['A', 'A2', 'B', 'C'].includes(s)) as ArchId[],
       };
     };
+    on('b-umem', 'change', (e) => { this.bench.preciseMemory = (e.target as HTMLInputElement).checked; });
     const run = async (suite: string) => {
       readOpts();
       this.lastSuite = suite;
@@ -544,7 +552,7 @@ export function resultsTable(results: ScenarioResult[]): string {
       <td>${fmt(r.visibleMean, 0)} / ${fmt(r.shadowOnlyMean, 0)}<br><span class="small">unres ${fmt(r.unresolvedFramesPct, 1)}%</span></td>
       <td>${fmt(r.queriesPerFrame, 1)}<br><span class="small">hit ${Number.isFinite(r.queryCacheHitRate) ? (r.queryCacheHitRate * 100).toFixed(0) + '%' : 'n/a'}</span></td>
       <td>${r.geometryGenerated}<br><span class="small">${fmt(r.geometryGenMsTotal, 1)} ms</span></td>
-      <td>${r.memory.browserHeapEndMB !== null ? fmt(r.memory.browserHeapEndMB, 0) + ' MB' : 'n/a'}<br><span class="small">geo ${fmt(r.memory.estimates['gpuGeometry.estimateMB'], 1)} MB est</span></td>
+      <td>${r.memory.uaSpecificMemoryMB !== null ? fmt(r.memory.uaSpecificMemoryMB, 0) + ' MB*' : r.memory.browserHeapEndMB !== null ? fmt(r.memory.browserHeapEndMB, 0) + ' MB' : 'n/a'}<br><span class="small">geo ${fmt(r.memory.estimates['gpuGeometry.estimateMB'], 1)} MB est</span></td>
     </tr>${r.yawSectors ? `<tr><td colspan="10" class="small">camera yaw sectors (JS ms / draws / visible / shadow-only): ${r.yawSectors.map((s) => `${s.sectorDeg}°: ${fmt(s.cpuMean, 2)}/${fmt(s.drawsMean, 0)}/${fmt(s.visibleMean, 0)}/${fmt(s.shadowOnlyMean, 0)}`).join(' · ')}</td></tr>` : ''}`;
   }).join('');
   return `<div class="scroll-x"><table class="t bench"><tr><th>Scenario</th><th>FPS</th><th>Frame ms</th><th>JS ms (Δ vs first)</th><th>GPU ms</th><th>Draws</th><th>Vis / shadow</th><th>Queries</th><th>Geom gen</th><th>Heap</th></tr>${rows}</table></div>`;
