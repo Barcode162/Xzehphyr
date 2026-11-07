@@ -84,16 +84,34 @@ export class TerrainField {
     this.version++;
   }
 
+  /** Arc-length spans of the trail covered by bridges (stream carving is allowed only there). */
+  private bridgeSpans: Array<[number, number]> = [];
+  setBridgeSpans(spans: Array<[number, number]>): void {
+    this.bridgeSpans = spans;
+    this.version++;
+  }
+  private inBridgeSpan(s: number): boolean {
+    const L = this.trail ? this.trail.segmentCount * this.trail.spacing : 0;
+    for (const [a, b] of this.bridgeSpans) {
+      if (s >= a && s <= b) return true;
+      if (L > 0 && (s + L >= a && s + L <= b || s - L >= a && s - L <= b)) return true;
+    }
+    return false;
+  }
+
   height(x: number, z: number): number {
     this.evalCount++;
     let h = this.baseHeight(x, z);
     const trail = this.trail;
+    let trailW = 0, trailS = 0;
     if (trail) {
       const p = trail.nearest(x, z, this.proj);
       if (p.dist < this.trailHalfWidth + this.trailShoulder) {
         const w = 1 - smoothstep(this.trailHalfWidth, this.trailHalfWidth + this.trailShoulder, p.dist);
         const groove = 0.12 * (1 - smoothstep(0, this.trailHalfWidth, p.dist));
         h = lerp(h, trail.profileAt(p.s) - groove, w);
+        trailW = 1 - smoothstep(this.trailHalfWidth + 1, this.trailHalfWidth + this.trailShoulder, p.dist);
+        trailS = p.s;
       }
     }
     const stream = this.stream;
@@ -104,7 +122,9 @@ export class TerrainField {
         const bed = stream.profileAt(p.s);
         const r = p.dist / this.streamHalfWidth;
         const channel = bed + (r < 1 ? r * r * 0.7 : 0.7 + (p.dist - this.streamHalfWidth) * 0.55);
-        const v = 1 - smoothstep(this.streamHalfWidth * 0.8, outer, p.dist);
+        let v = 1 - smoothstep(this.streamHalfWidth * 0.8, outer, p.dist);
+        // outside bridge spans the trail corridor is an embankment: the valley does not cut the trail
+        if (trailW > 0 && !this.inBridgeSpan(trailS)) v *= 1 - trailW;
         h = Math.min(h, lerp(h, channel, v));
       }
     }

@@ -169,6 +169,31 @@ export function buildWorld(config: WorldConfig): BuiltWorld {
   // terrain carving uses world-space copies of the curves (forest/trail frames are at the origin here)
   terrain.attachCurves(trailCurve, streamCurve);
 
+  // trail/stream crossings → bridge spans. Computed before any terrain sampling, because the
+  // terrain field keeps the trail corridor at trail height outside bridge spans (embankments).
+  const crossings: Array<{ s: number; halfLen: number }> = [];
+  {
+    const pj: CurveProjection = { s: 0, lateral: 0, dist: 0, seg: 0 };
+    let prevSide = 0;
+    for (let i = 0; i < trailCurve.n; i++) {
+      streamCurve.nearest(trailCurve.px[i], trailCurve.pz[i], pj);
+      if (pj.dist === Infinity) { prevSide = 0; continue; }
+      const side = Math.sign(pj.lateral);
+      if (prevSide !== 0 && side !== prevSide && pj.dist < 3) {
+        const cs = i * trailCurve.spacing;
+        const seg = trailCurve.segmentAt(cs);
+        const sseg = pj.seg >= 0 ? pj.seg : 0;
+        // crossing angle: compare trail direction with stream direction
+        const dot = Math.abs(trailCurve.dx[seg] * streamCurve.dx[sseg] + trailCurve.dz[seg] * streamCurve.dz[sseg]);
+        const sinA = Math.sqrt(Math.max(0.05, 1 - dot * dot));
+        const halfLen = Math.min(38, Math.max(9, (terrain.streamHalfWidth + terrain.streamValley * 0.6 + 2) / sinA));
+        crossings.push({ s: cs, halfLen });
+      }
+      prevSide = side;
+    }
+  }
+  terrain.setBridgeSpans(crossings.map((c) => [c.s - c.halfLen + 1, c.s + c.halfLen - 1] as [number, number]));
+
   // regions: a grid of local reference frames, each also a terrain patch owner
   const rs = config.regionSize;
   const dim = Math.round(config.size / rs);
@@ -224,26 +249,7 @@ export function buildWorld(config: WorldConfig): BuiltWorld {
 
   // ---------------------------------------------------------------- bridges where trail crosses stream
   const bridges: number[] = [];
-  const crossings: number[] = [];
-  {
-    let prevSide = 0;
-    for (let i = 0; i < trailCurve.n; i++) {
-      streamCurve.nearest(trailCurve.px[i], trailCurve.pz[i], proj);
-      if (proj.dist === Infinity) { prevSide = 0; continue; }
-      const side = Math.sign(proj.lateral);
-      if (prevSide !== 0 && side !== prevSide && proj.dist < 3) crossings.push(i * trailCurve.spacing);
-      prevSide = side;
-    }
-  }
-  for (const s of crossings) {
-    const seg = trailCurve.segmentAt(s);
-    // crossing angle: compare trail direction with stream direction
-    const x = trailCurve.px[seg], z = trailCurve.pz[seg];
-    streamCurve.nearest(x, z, proj);
-    const sseg = proj.seg >= 0 ? proj.seg : 0;
-    const dot = Math.abs(trailCurve.dx[seg] * streamCurve.dx[sseg] + trailCurve.dz[seg] * streamCurve.dz[sseg]);
-    const sinA = Math.sqrt(Math.max(0.05, 1 - dot * dot));
-    const halfLen = Math.min(26, Math.max(8, (terrain.streamHalfWidth + terrain.streamValley + 1.5) / sinA));
+  for (const { s, halfLen } of crossings) {
     const bDef = db.addDef({ family: Family.Bridge, variant: 0, seed: hash2(config.seed, Math.round(s)), lodCount: 2, lodDist2: [90 * 90], maxDrawDist: 420, params: [halfLen, 1.7], shared: false, material: M.wood });
     const bPhys = db.addPhysical({ shape: ColliderShape.BridgeDeck, dims: [halfLen, 1.7, 0.25, 1.1], surface: 'wood', friction: 1 });
     const b = db.create({

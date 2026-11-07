@@ -653,6 +653,7 @@ export class Engine {
 
   /** Teleport the runner to an arc length on the trail (trail-relative positioning). */
   placeOnTrail(s: number): void {
+    if (!Number.isFinite(s)) throw new Error(`placeOnTrail: arc length must be finite (got ${String(s)})`);
     const w = this.world;
     w.db.reparent(w.player, w.trail, FrameMode.Curve);
     w.db.setLocal(w.player, w.trailCurve.wrapS(s), 0, 0);
